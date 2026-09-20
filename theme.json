@@ -1,0 +1,7 @@
+{
+  "name": "Speed Dial - foco na barra de endereço",
+  "description": "Na página de nova aba do Speed Dial, digitar qualquer tecla foca a barra de endereço real do Zen e já começa a escrever nela.",
+  "author": "você",
+  "version": "1.0.0",
+  "tags": ["urlbar", "newtab", "speed dial"]
+}
