@@ -5,5 +5,11 @@
   "author": "seu-nome",
   "version": "1.0.0",
   "homepage": "seu-usuario/type-to-search",
+  "scripts": {
+    "main.uc.js": {
+      "include": ["chrome://browser/content/browser.xhtml"],
+      "loadOrder": 1
+    }
+  },
   "supportsUnload": false
 }
