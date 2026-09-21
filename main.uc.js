@@ -165,5 +165,42 @@
     true
   );
 
+  // --- Esconde o texto "Nova aba" / "New Tab" da aba quando ela está na
+  //     Speed Dial, deixando só o ícone (favicon) visível. O Firefox/Zen
+  //     força esse rótulo por conta própria, ignorando o <title> da
+  //     página — por isso precisa ser feito aqui, na interface do navegador.
+  function isHomeUri(uri) {
+    try {
+      return HOME_PREFIXES.some((p) => (uri?.spec || "").startsWith(p));
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function blankHomeTabLabel(tab) {
+    try {
+      const uri = tab?.linkedBrowser?.currentURI;
+      if (!isHomeUri(uri)) return;
+      if (tab.getAttribute("label") !== " ") {
+        tab.setAttribute("label", " ");
+      }
+    } catch (err) {
+      log("falha ao limpar o rótulo da aba:", err);
+    }
+  }
+
+  gBrowser.tabContainer.addEventListener("TabAttrModified", (e) => {
+    if (e.detail?.changed?.includes("label")) {
+      blankHomeTabLabel(e.target);
+    }
+  });
+
+  gBrowser.tabContainer.addEventListener("TabOpen", (e) => {
+    blankHomeTabLabel(e.target);
+  });
+
+  // Aplica nas abas que já estiverem abertas quando o script carregar.
+  for (const tab of gBrowser.tabs) blankHomeTabLabel(tab);
+
   console.log("[TypeToSearch] loaded");
 })();
