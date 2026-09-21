@@ -165,10 +165,11 @@
     true
   );
 
-  // --- Esconde o texto "Nova aba" / "New Tab" da aba quando ela está na
-  //     Speed Dial, deixando só o ícone (favicon) visível. O Firefox/Zen
-  //     força esse rótulo por conta própria, ignorando o <title> da
-  //     página — por isso precisa ser feito aqui, na interface do navegador.
+  // --- Esconde o texto "Nova aba" / "New Tab" e força o ícone da extensão
+  //     na aba, quando ela está na Speed Dial. O Firefox/Zen bloqueia os
+  //     dois (rótulo e favicon) pra qualquer página reconhecida como "nova
+  //     aba", ignorando <title> e <link rel="icon"> da própria página — por
+  //     isso os dois precisam ser forçados aqui, na interface do navegador.
   function isHomeUri(uri) {
     try {
       return HOME_PREFIXES.some((p) => (uri?.spec || "").startsWith(p));
@@ -177,30 +178,85 @@
     }
   }
 
-  function blankHomeTabLabel(tab) {
+  function applyHomeTabAppearance(tab) {
     try {
       const uri = tab?.linkedBrowser?.currentURI;
       if (!isHomeUri(uri)) return;
+
       if (tab.getAttribute("label") !== " ") {
+        log("escondendo o rótulo da aba (era):", tab.getAttribute("label"));
         tab.setAttribute("label", " ");
       }
+
+      // Só sabemos montar o caminho do ícone quando a URL é da própria
+      // extensão (moz-extension://<uuid>/...) — about:newtab/about:home
+      // não têm um ícone de extensão pra usar.
+      if (uri.scheme === "moz-extension") {
+        const iconUrl = uri.prePath + "/icons/icon32.png";
+        if (tab.getAttribute("image") !== iconUrl) {
+          log("forçando o ícone da aba:", iconUrl);
+          gBrowser.setIcon(tab, iconUrl);
+        }
+      }
     } catch (err) {
-      log("falha ao limpar o rótulo da aba:", err);
+      log("falha ao aplicar aparência da aba:", err);
     }
   }
 
-  gBrowser.tabContainer.addEventListener("TabAttrModified", (e) => {
-    if (e.detail?.changed?.includes("label")) {
-      blankHomeTabLabel(e.target);
+  // Reaplica um pouco depois, caso o próprio Firefox tente sobrescrever
+  // de volta (ex.: processamento assíncrono do <title> da página) logo
+  // após a navegação terminar — assim a nossa versão "vence" a corrida.
+  function applyHomeTabAppearanceWithRetries(tab) {
+    applyHomeTabAppearance(tab);
+    setTimeout(() => applyHomeTabAppearance(tab), 200);
+    setTimeout(() => applyHomeTabAppearance(tab), 800);
+    setTimeout(() => applyHomeTabAppearance(tab), 2000);
+  }
+
+  function setupTabAppearanceOverride() {
+    if (!window.gBrowser || !gBrowser.tabContainer) {
+      log("gBrowser ainda não está pronto, tentando de novo em breve...");
+      setTimeout(setupTabAppearanceOverride, 500);
+      return;
     }
-  });
 
-  gBrowser.tabContainer.addEventListener("TabOpen", (e) => {
-    blankHomeTabLabel(e.target);
-  });
+    try {
+      gBrowser.tabContainer.addEventListener("TabAttrModified", (e) => {
+        if (e.detail?.changed?.includes("label") || e.detail?.changed?.includes("image")) {
+          applyHomeTabAppearance(e.target);
+        }
+      });
 
-  // Aplica nas abas que já estiverem abertas quando o script carregar.
-  for (const tab of gBrowser.tabs) blankHomeTabLabel(tab);
+      gBrowser.tabContainer.addEventListener("TabOpen", (e) => {
+        applyHomeTabAppearanceWithRetries(e.target);
+      });
+
+      // Gatilho mais confiável: dispara quando a aba TERMINA de navegar
+      // pra uma URL, independente de qualquer lógica interna de "aba
+      // vazia" do Firefox mexer (ou não) nos atributos label/image.
+      const progressListener = {
+        onLocationChange(webProgress, request, location) {
+          if (!webProgress.isTopLevel) return;
+          try {
+            const tab = gBrowser.getTabForBrowser(webProgress.browser);
+            if (tab) applyHomeTabAppearanceWithRetries(tab);
+          } catch (err) {
+            log("falha no onLocationChange:", err);
+          }
+        },
+      };
+      gBrowser.addTabsProgressListener(progressListener);
+
+      // Aplica nas abas que já estiverem abertas quando o script carregar.
+      for (const tab of gBrowser.tabs) applyHomeTabAppearanceWithRetries(tab);
+
+      log("aparência da aba da home: configurado com sucesso");
+    } catch (err) {
+      console.error("[TypeToSearch] falha ao configurar a aparência da aba:", err);
+    }
+  }
+
+  setupTabAppearanceOverride();
 
   console.log("[TypeToSearch] loaded");
 })();
