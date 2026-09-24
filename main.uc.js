@@ -79,6 +79,8 @@
   }
 
   // --- Injeção de Frame Script leve para capturar cliques na barra visual da extensão ---
+  // MODO DEBUG: loga todo clique (id/tag/classe) sem filtro, pra descobrir por que
+  // o clique na barra de pesquisa não está ativando a urlbar.
   const SEARCH_CLICK_MSG = "SpeedDial:VisualSearchClick";
   const FRAME_SCRIPT_SRC = `
     (function () {
@@ -88,11 +90,11 @@
         try {
           const t = e.target;
           if (!t) return;
-          // Verifica se clicou no input ilustrativo ou no container de busca
-          const isSearchBox = t.id === "searchInput" || t.id === "searchForm" || (t.closest && t.closest("#searchForm"));
-          if (isSearchBox) {
-            sendAsyncMessage("${SEARCH_CLICK_MSG}", {});
-          }
+          sendAsyncMessage("${SEARCH_CLICK_MSG}", {
+            id: t.id || "(sem id)",
+            tag: t.tagName,
+            cls: t.className || "(sem classe)"
+          });
         } catch (err) {}
       }, true);
     }).call(this);
@@ -104,9 +106,15 @@
       const dataUrl = "data:application/javascript;charset=utf-8," + encodeURIComponent(FRAME_SCRIPT_SRC);
       mm.loadFrameScript(dataUrl, true);
 
-      window.messageManager.addMessageListener(SEARCH_CLICK_MSG, () => {
+      window.messageManager.addMessageListener(SEARCH_CLICK_MSG, (msg) => {
+        log("Clique detectado ->", msg.data);
         if (!isHomePage()) return;
-        log("Clique na barra ilustrativa detectado via frame script, ativando urlbar");
+        const isSearchBox =
+          msg.data.id === "searchInput" ||
+          msg.data.id === "searchForm" ||
+          (msg.data.cls && msg.data.cls.includes("search"));
+        if (!isSearchBox) return;
+        log("Ativando urlbar");
         gURLBar.focus();
         gURLBar.select();
       });
