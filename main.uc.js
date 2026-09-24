@@ -266,16 +266,26 @@
   //     Importante: cliques dentro do conteúdo só chegam em listeners
   //     anexados DIRETAMENTE no elemento <browser> da aba (não no
   //     `window` do navegador) — é assim que o próprio Firefox faz
-  //     internamente (ex.: aBrowser.addEventListener("click", ...)).
+  //     internamente (ex.: aBrowser.addEventListener("click", ...)),
+  //     e aparentemente só o evento "click" é repassado dessa forma
+  //     (não "mousedown").
   const SEARCH_INPUT_ID = "searchInput"; // precisa bater com o id do input na extensão
   const attachedBrowsers = new WeakSet();
 
-  function handleContentMouseDown(e) {
+  function handleContentClick(e) {
     try {
-      if (e.button !== 0) return; // só botão esquerdo
       if (!isHomePage()) return;
 
       const target = e.target;
+      // Log incondicional: ajuda a diagnosticar se o evento está
+      // chegando de fato, mesmo quando não é na barra de pesquisa.
+      log("clique no conteúdo da home:", {
+        id: target?.id,
+        tag: target?.tagName,
+        button: e.button,
+      });
+
+      if (e.button !== 0) return; // só botão esquerdo
       if (!target) return;
 
       const withinSearch =
@@ -300,8 +310,9 @@
   function attachClickHandlerToBrowser(browser) {
     try {
       if (!browser || attachedBrowsers.has(browser)) return;
-      browser.addEventListener("mousedown", handleContentMouseDown, true);
+      browser.addEventListener("click", handleContentClick, true);
       attachedBrowsers.add(browser);
+      log("listener de clique anexado a um <browser>");
     } catch (err) {
       log("falha ao anexar listener de clique na aba:", err);
     }
@@ -326,6 +337,23 @@
       gBrowser.tabContainer.addEventListener("TabBrowserInserted", (e) => {
         if (e.target?.linkedBrowser) attachClickHandlerToBrowser(e.target.linkedBrowser);
       });
+
+      // Rede de segurança: cobre casos como abas de nova-aba
+      // pré-carregadas (newtab preload), que trocam o <browser> de
+      // uma aba sem disparar os eventos acima.
+      const observerTarget = gBrowser.tabpanels || gBrowser;
+      const mo = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeName === "browser") {
+              attachClickHandlerToBrowser(node);
+            } else if (node.querySelectorAll) {
+              node.querySelectorAll("browser").forEach(attachClickHandlerToBrowser);
+            }
+          }
+        }
+      });
+      mo.observe(observerTarget, { childList: true, subtree: true });
 
       log("redirecionamento da barra de pesquisa: configurado com sucesso");
     } catch (err) {
