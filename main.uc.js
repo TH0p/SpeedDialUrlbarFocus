@@ -78,13 +78,44 @@
     }
   }
 
-  // --- Ouve o clique vindo da barra ilustrativa da extensão ---
-  window.addEventListener("SpeedDialFocusSearch", () => {
-    if (!isHomePage()) return;
-    log("Barra ilustrativa clicada, ativando urlbar do navegador");
-    gURLBar.focus();
-    gURLBar.select();
-  });
+  // --- Injeção de Frame Script leve para capturar cliques na barra visual da extensão ---
+  const SEARCH_CLICK_MSG = "SpeedDial:VisualSearchClick";
+  const FRAME_SCRIPT_SRC = `
+    (function () {
+      if (this.__speedDialVisualClickLoaded) return;
+      this.__speedDialVisualClickLoaded = true;
+      addEventListener("click", function (e) {
+        try {
+          const t = e.target;
+          if (!t) return;
+          // Verifica se clicou no input ilustrativo ou no container de busca
+          const isSearchBox = t.id === "searchInput" || t.id === "searchForm" || (t.closest && t.closest("#searchForm"));
+          if (isSearchBox) {
+            sendAsyncMessage("${SEARCH_CLICK_MSG}", {});
+          }
+        } catch (err) {}
+      }, true);
+    }).call(this);
+  `;
+
+  function setupVisualSearchRedirect() {
+    try {
+      const mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIFrameScriptLoader);
+      const dataUrl = "data:application/javascript;charset=utf-8," + encodeURIComponent(FRAME_SCRIPT_SRC);
+      mm.loadFrameScript(dataUrl, true);
+
+      window.messageManager.addMessageListener(SEARCH_CLICK_MSG, () => {
+        if (!isHomePage()) return;
+        log("Clique na barra ilustrativa detectado via frame script, ativando urlbar");
+        gURLBar.focus();
+        gURLBar.select();
+      });
+    } catch (err) {
+      log("Erro ao configurar frame script de clique:", err);
+    }
+  }
+
+  setupVisualSearchRedirect();
 
   let lastIgnoredUrl = "";
 
