@@ -8,47 +8,29 @@
   if (window.__typeToSearchLoaded) return;
   window.__typeToSearchLoaded = true;
 
-  // Deixe true para diagnosticar (Ctrl+Shift+J e filtre por "TypeToSearch").
-  // Quando estiver funcionando, troque para false.
   const DEBUG = true;
-
-  // Início da URL da sua Speed Dial. Se você souber a URL exata
-  // (ex.: "moz-extension://a1b2c3d4-.../"), coloque aqui no lugar do genérico.
-  // about:newtab / about:home cobrem o caso da extensão ser só um override da nova aba.
   const HOME_PREFIXES = ["moz-extension://", "about:newtab", "about:home"];
 
   const log = (...a) => DEBUG && console.log("[TypeToSearch]", ...a);
   const currentUrl = () => gBrowser.selectedBrowser?.currentURI?.spec || "";
   const isHomePage = () => HOME_PREFIXES.some((p) => currentUrl().startsWith(p));
 
-  // Alguns loaders (fx-autoconfig/Sine) expõem "Components" completo,
-  // outros só os atalhos globais Cc/Ci. Tenta os dois.
   const XPCOM = (() => {
     try {
       if (typeof Components !== "undefined" && Components.classes) {
         return { cc: Components.classes, ci: Components.interfaces };
       }
-    } catch (e) {
-      /* ignora */
-    }
+    } catch (e) {}
     try {
       if (typeof Cc !== "undefined" && typeof Ci !== "undefined") {
         return { cc: Cc, ci: Ci };
       }
-    } catch (e) {
-      /* ignora */
-    }
+    } catch (e) {}
     return null;
   })();
 
-  // Lê a área de transferência de forma síncrona via nsIClipboard
-  // (API privilegiada do próprio Firefox — mais confiável em páginas chrome
-  // do que navigator.clipboard, que às vezes falha silenciosamente ali).
   function readClipboardTextSync() {
-    if (!XPCOM) {
-      log("Components/Cc/Ci indisponíveis nesse loader, pulando leitura síncrona");
-      return "";
-    }
+    if (!XPCOM) return "";
     const flavors = ["text/plain", "text/unicode"];
     for (const flavor of flavors) {
       try {
@@ -64,52 +46,51 @@
           const text = data.value.QueryInterface(XPCOM.ci.nsISupportsString).data;
           if (text) return text;
         }
-      } catch (err) {
-        log(`leitura via nsIClipboard (${flavor}) falhou:`, err);
-      }
+      } catch (err) {}
     }
     return "";
   }
 
-  // Coloca o texto (digitado ou colado) na urlbar e inicia a busca/autocomplete.
   function pushToUrlBar(text) {
     log("colocando na urlbar:", text);
     try {
-      gURLBar.search(text); // foca a barra, coloca o texto e inicia a busca
+      gURLBar.search(text);
     } catch (err) {
-      log("search() falhou, usando fallback:", err);
       gURLBar.focus();
       gURLBar.value = text;
       gURLBar.startQuery();
     }
-    // garante que o cursor fique no fim (texto não selecionado)
     const caretToEnd = () => gURLBar.setSelectionRange(text.length, text.length);
     caretToEnd();
     requestAnimationFrame(caretToEnd);
   }
 
   function handlePaste() {
-    log("Ctrl/Cmd+V detectado na home, tentando ler a área de transferência");
-
     const syncText = readClipboardTextSync();
     if (syncText) {
       pushToUrlBar(syncText);
       return;
     }
-
-    // Fallback assíncrono, só se o método privilegiado não trouxe nada.
     if (navigator.clipboard && navigator.clipboard.readText) {
-      navigator.clipboard
-        .readText()
-        .then((asyncText) => {
-          if (asyncText) pushToUrlBar(asyncText);
-          else log("área de transferência vazia (nenhum dos métodos encontrou texto)");
-        })
-        .catch((err) => log("navigator.clipboard também falhou:", err));
-    } else {
-      log("nenhum método de leitura de área de transferência disponível");
+      navigator.clipboard.readText().then((asyncText) => {
+        if (asyncText) pushToUrlBar(asyncText);
+      }).catch(() => {});
     }
   }
+
+  // --- Ouve o clique vindo da Speed Dial para focar na urlbar ---
+  window.addEventListener("message", (e) => {
+    try {
+      if (!isHomePage()) return;
+      if (e.data && e.data.type === "SPEED_DIAL_FOCUS_SEARCH") {
+        log("Clique na pesquisa da extensão detectado, ativando urlbar");
+        gURLBar.focus();
+        gURLBar.select();
+      }
+    } catch (err) {
+      log("Erro ao processar mensagem da extensão:", err);
+    }
+  });
 
   let lastIgnoredUrl = "";
 
@@ -118,9 +99,7 @@
     (e) => {
       try {
         const url = currentUrl();
-
         if (!isHomePage()) {
-          // loga só uma vez por URL, e sem registrar as teclas
           if (DEBUG && url !== lastIgnoredUrl) {
             lastIgnoredUrl = url;
             log("ignorado: a URL da aba não bate com HOME_PREFIXES ->", url);
@@ -129,11 +108,9 @@
         }
 
         const contentFocused = document.activeElement === gBrowser.selectedBrowser;
-
         if (e.defaultPrevented || e.isComposing || e.repeat) return;
-        if (!contentFocused) return; // foco na urlbar, busca, sidebar etc.
+        if (!contentFocused) return;
 
-        // --- Ctrl+V / Cmd+V: cola o que estiver na área de transferência ---
         const isPasteShortcut =
           (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v";
 
@@ -144,16 +121,8 @@
           return;
         }
 
-        // --- daqui pra baixo é o comportamento original: digitar já busca ---
         if (e.ctrlKey || e.altKey || e.metaKey) return;
-        if (e.key.length !== 1 || e.key === " ") return; // só caracteres imprimíveis
-
-        log("tecla na home:", e.key, {
-          url,
-          contentFocused,
-          activeElement: document.activeElement?.localName,
-          defaultPrevented: e.defaultPrevented,
-        });
+        if (e.key.length !== 1 || e.key === " ") return;
 
         e.preventDefault();
         e.stopPropagation();
@@ -165,11 +134,6 @@
     true
   );
 
-  // --- Esconde o texto "Nova aba" / "New Tab" e força o ícone da extensão
-  //     na aba, quando ela está na Speed Dial. O Firefox/Zen bloqueia os
-  //     dois (rótulo e favicon) pra qualquer página reconhecida como "nova
-  //     aba", ignorando <title> e <link rel="icon"> da própria página — por
-  //     isso os dois precisam ser forçados aqui, na interface do navegador.
   function isHomeUri(uri) {
     try {
       return HOME_PREFIXES.some((p) => (uri?.spec || "").startsWith(p));
@@ -184,28 +148,18 @@
       if (!isHomeUri(uri)) return;
 
       if (tab.getAttribute("label") !== " ") {
-        log("escondendo o rótulo da aba (era):", tab.getAttribute("label"));
         tab.setAttribute("label", " ");
       }
 
-      // Só sabemos montar o caminho do ícone quando a URL é da própria
-      // extensão (moz-extension://<uuid>/...) — about:newtab/about:home
-      // não têm um ícone de extensão pra usar.
       if (uri.scheme === "moz-extension") {
         const iconUrl = uri.prePath + "/icons/icon32.png";
         if (tab.getAttribute("image") !== iconUrl) {
-          log("forçando o ícone da aba:", iconUrl);
           gBrowser.setIcon(tab, iconUrl);
         }
       }
-    } catch (err) {
-      log("falha ao aplicar aparência da aba:", err);
-    }
+    } catch (err) {}
   }
 
-  // Reaplica um pouco depois, caso o próprio Firefox tente sobrescrever
-  // de volta (ex.: processamento assíncrono do <title> da página) logo
-  // após a navegação terminar — assim a nossa versão "vence" a corrida.
   function applyHomeTabAppearanceWithRetries(tab) {
     applyHomeTabAppearance(tab);
     setTimeout(() => applyHomeTabAppearance(tab), 200);
@@ -215,7 +169,6 @@
 
   function setupTabAppearanceOverride() {
     if (!window.gBrowser || !gBrowser.tabContainer) {
-      log("gBrowser ainda não está pronto, tentando de novo em breve...");
       setTimeout(setupTabAppearanceOverride, 500);
       return;
     }
@@ -231,57 +184,23 @@
         applyHomeTabAppearanceWithRetries(e.target);
       });
 
-      // Gatilho mais confiável: dispara quando a aba TERMINA de navegar
-      // pra uma URL, independente de qualquer lógica interna de "aba
-      // vazia" do Firefox mexer (ou não) nos atributos label/image.
       const progressListener = {
         onLocationChange(webProgress, request, location) {
           if (!webProgress.isTopLevel) return;
           try {
             const tab = gBrowser.getTabForBrowser(webProgress.browser);
             if (tab) applyHomeTabAppearanceWithRetries(tab);
-          } catch (err) {
-            log("falha no onLocationChange:", err);
-          }
+          } catch (err) {}
         },
       };
       gBrowser.addTabsProgressListener(progressListener);
 
-      // Aplica nas abas que já estiverem abertas quando o script carregar.
       for (const tab of gBrowser.tabs) applyHomeTabAppearanceWithRetries(tab);
-
-      log("aparência da aba da home: configurado com sucesso");
     } catch (err) {
-      console.error("[TypeToSearch] falha ao configurar a aparência da aba:", err);
+      console.error("[TypeToSearch] falha ao configurar aparência da aba:", err);
     }
   }
 
   setupTabAppearanceOverride();
-
-  // --- Redirecionamento seguro de foco para a barra de endereços ---
-  // Monitora interações dentro da página da Speed Dial para focar na gURLBar 
-  // de forma compatível com as restrições de segurança do Zen/Firefox.
-  function setupSearchBarRedirect() {
-    try {
-      // Ouve eventos de foco ou cliques em nível de chrome para capturar interações na home
-      window.addEventListener("click", (e) => {
-        if (!isHomePage()) return;
-        
-        // Se o clique veio de dentro do browser da aba ativa e o usuário buscou interagir
-        // com elementos da extensão, podemos garantir que o foco flua bem.
-        const activeBrowser = gBrowser.selectedBrowser;
-        if (e.target === activeBrowser) {
-          // Clique direto na área da página. Se necessário, podemos puxar o foco.
-        }
-      }, true);
-
-      log("Gerenciador de foco da Speed Dial configurado com sucesso.");
-    } catch (err) {
-      console.error("[TypeToSearch] falha ao configurar redirecionamento da busca:", err);
-    }
-  }
-
-  setupSearchBarRedirect();
-
   console.log("[TypeToSearch] loaded");
 })();
