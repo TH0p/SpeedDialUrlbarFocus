@@ -78,18 +78,12 @@
     }
   }
 
-  // --- Ouve o clique vindo da Speed Dial para focar na urlbar ---
-  window.addEventListener("message", (e) => {
-    try {
-      if (!isHomePage()) return;
-      if (e.data && e.data.type === "SPEED_DIAL_FOCUS_SEARCH") {
-        log("Clique na pesquisa da extensão detectado, ativando urlbar");
-        gURLBar.focus();
-        gURLBar.select();
-      }
-    } catch (err) {
-      log("Erro ao processar mensagem da extensão:", err);
-    }
+  // --- Ouve o evento personalizado vindo da Speed Dial para focar na urlbar ---
+  window.addEventListener("SpeedDialFocusSearch", () => {
+    if (!isHomePage()) return;
+    log("Foco na pesquisa da extensão detectado via CustomEvent, ativando urlbar");
+    gURLBar.focus();
+    gURLBar.select();
   });
 
   let lastIgnoredUrl = "";
