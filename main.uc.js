@@ -78,26 +78,24 @@
     }
   }
 
-  // --- Injeção de Frame Script por-aba para capturar cliques na barra visual da extensão ---
-  // MODO DEBUG: loga todo clique (id/tag/classe) sem filtro, e avisa assim que o
-  // script é injetado num processo (ping), pra isolar se o problema é de injeção
-  // ou de detecção do clique.
+  // --- Injeção de Frame Script por-aba para capturar o clique na barra visual da extensão ---
   const SEARCH_CLICK_MSG = "SpeedDial:VisualSearchClick";
-  const PING_MSG = "SpeedDial:FrameScriptPing";
   const FRAME_SCRIPT_SRC = `
     (function () {
       if (this.__speedDialVisualClickLoaded) return;
       this.__speedDialVisualClickLoaded = true;
-      sendAsyncMessage("${PING_MSG}", { url: String(content?.location?.href || "") });
-      addEventListener("click", function (e) {
+      addEventListener("mousedown", function (e) {
         try {
           const t = e.target;
           if (!t) return;
-          sendAsyncMessage("${SEARCH_CLICK_MSG}", {
-            id: t.id || "(sem id)",
-            tag: t.tagName,
-            cls: t.className || "(sem classe)"
-          });
+          const isSearchBox =
+            t.id === "searchInput" ||
+            t.id === "searchForm" ||
+            (t.closest && t.closest("#searchForm"));
+          if (!isSearchBox) return;
+          // Impede o <input readonly> de roubar o foco antes da urlbar ser ativada
+          e.preventDefault();
+          sendAsyncMessage("${SEARCH_CLICK_MSG}", {});
         } catch (err) {}
       }, true);
     }).call(this);
@@ -108,7 +106,6 @@
   function injectVisualSearchScript(browser) {
     try {
       browser.messageManager.loadFrameScript(FRAME_SCRIPT_URL, false);
-      log("Injeção solicitada para browser ->", browser?.currentURI?.spec);
     } catch (err) {
       log("Erro ao injetar frame script na aba:", err);
     }
@@ -116,24 +113,14 @@
 
   function setupVisualSearchRedirect() {
     try {
-      window.messageManager.addMessageListener(PING_MSG, (msg) => {
-        log("PING recebido — frame script injetado com sucesso em ->", msg.data.url);
-      });
-
-      window.messageManager.addMessageListener(SEARCH_CLICK_MSG, (msg) => {
-        log("Clique detectado ->", msg.data);
+      window.messageManager.addMessageListener(SEARCH_CLICK_MSG, () => {
         if (!isHomePage()) return;
-        const isSearchBox =
-          msg.data.id === "searchInput" ||
-          msg.data.id === "searchForm" ||
-          (msg.data.cls && msg.data.cls.includes("search"));
-        if (!isSearchBox) return;
-        log("Ativando urlbar");
+        log("Clique na barra de pesquisa detectado, ativando urlbar");
         gURLBar.focus();
         gURLBar.select();
       });
     } catch (err) {
-      log("Erro ao configurar listeners de clique:", err);
+      log("Erro ao configurar listener de clique:", err);
     }
   }
 
