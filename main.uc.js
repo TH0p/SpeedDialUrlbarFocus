@@ -78,10 +78,10 @@
     }
   }
 
-  // --- Ouve o evento personalizado vindo da Speed Dial para focar na urlbar ---
+  // --- Ouve o clique vindo da barra ilustrativa da extensão ---
   window.addEventListener("SpeedDialFocusSearch", () => {
     if (!isHomePage()) return;
-    log("Foco na pesquisa da extensão detectado via CustomEvent, ativando urlbar");
+    log("Barra ilustrativa clicada, ativando urlbar do navegador");
     gURLBar.focus();
     gURLBar.select();
   });
