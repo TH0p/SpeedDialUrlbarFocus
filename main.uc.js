@@ -262,7 +262,13 @@
   //     digitar ali dentro, transfere o foco direto pra barra de
   //     endereços do navegador (mesma barra que já ganha o texto
   //     quando você digita solto na página).
+  //
+  //     Importante: cliques dentro do conteúdo só chegam em listeners
+  //     anexados DIRETAMENTE no elemento <browser> da aba (não no
+  //     `window` do navegador) — é assim que o próprio Firefox faz
+  //     internamente (ex.: aBrowser.addEventListener("click", ...)).
   const SEARCH_INPUT_ID = "searchInput"; // precisa bater com o id do input na extensão
+  const attachedBrowsers = new WeakSet();
 
   function handleContentMouseDown(e) {
     try {
@@ -291,7 +297,43 @@
     }
   }
 
-  window.addEventListener("mousedown", handleContentMouseDown, true);
+  function attachClickHandlerToBrowser(browser) {
+    try {
+      if (!browser || attachedBrowsers.has(browser)) return;
+      browser.addEventListener("mousedown", handleContentMouseDown, true);
+      attachedBrowsers.add(browser);
+    } catch (err) {
+      log("falha ao anexar listener de clique na aba:", err);
+    }
+  }
+
+  function setupSearchBarRedirect() {
+    if (!window.gBrowser || !gBrowser.tabContainer) {
+      setTimeout(setupSearchBarRedirect, 500);
+      return;
+    }
+
+    try {
+      // Abas já abertas.
+      for (const tab of gBrowser.tabs) {
+        if (tab.linkedBrowser) attachClickHandlerToBrowser(tab.linkedBrowser);
+      }
+
+      // Abas novas, incluindo troca de processo/remoteness.
+      gBrowser.tabContainer.addEventListener("TabOpen", (e) => {
+        if (e.target?.linkedBrowser) attachClickHandlerToBrowser(e.target.linkedBrowser);
+      });
+      gBrowser.tabContainer.addEventListener("TabBrowserInserted", (e) => {
+        if (e.target?.linkedBrowser) attachClickHandlerToBrowser(e.target.linkedBrowser);
+      });
+
+      log("redirecionamento da barra de pesquisa: configurado com sucesso");
+    } catch (err) {
+      console.error("[TypeToSearch] falha ao configurar redirecionamento da busca:", err);
+    }
+  }
+
+  setupSearchBarRedirect();
 
   console.log("[TypeToSearch] loaded");
 })();
