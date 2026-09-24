@@ -263,99 +263,100 @@
   //     endereços do navegador (mesma barra que já ganha o texto
   //     quando você digita solto na página).
   //
-  //     Importante: cliques dentro do conteúdo só chegam em listeners
-  //     anexados DIRETAMENTE no elemento <browser> da aba (não no
-  //     `window` do navegador) — é assim que o próprio Firefox faz
-  //     internamente (ex.: aBrowser.addEventListener("click", ...)),
-  //     e aparentemente só o evento "click" é repassado dessa forma
-  //     (não "mousedown").
+  //     Tentamos antes escutar "click" direto no elemento <browser>
+  //     da aba, mas o Firefox só entrega o <browser> genérico como
+  //     alvo (sem dizer qual elemento DENTRO da página foi clicado).
+  //     Por isso usamos um "frame script": um scriptzinho que roda
+  //     dentro do processo de conteúdo (tem acesso normal ao DOM da
+  //     página) e avisa o navegador via mensagem quando o clique foi
+  //     especificamente na barra de pesquisa.
   const SEARCH_INPUT_ID = "searchInput"; // precisa bater com o id do input na extensão
-  const attachedBrowsers = new WeakSet();
+  const SEARCH_CLICK_MSG = "SpeedDial:SearchBarClick";
 
-  function handleContentClick(e) {
-    try {
-      if (!isHomePage()) return;
+  const FRAME_SCRIPT_SRC = `
+    (function () {
+      if (this.__speedDialSearchFrameScriptLoaded) return;
+      this.__speedDialSearchFrameScriptLoaded = true;
 
-      const target = e.target;
-      // Log incondicional: ajuda a diagnosticar se o evento está
-      // chegando de fato, mesmo quando não é na barra de pesquisa.
-      log("clique no conteúdo da home:", {
-        id: target?.id,
-        tag: target?.tagName,
-        button: e.button,
-      });
+      const HOME_PREFIXES = ${JSON.stringify(HOME_PREFIXES)};
+      const SEARCH_ID = ${JSON.stringify(SEARCH_INPUT_ID)};
 
-      if (e.button !== 0) return; // só botão esquerdo
-      if (!target) return;
-
-      const withinSearch =
-        target.id === SEARCH_INPUT_ID || target.closest?.("#searchForm, #" + SEARCH_INPUT_ID);
-      if (!withinSearch) return;
-
-      log("clique na barra de pesquisa da Speed Dial, abrindo a urlbar");
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        target.blur?.();
-      } catch (err) {
-        /* ignora */
+      function isHome() {
+        try {
+          return HOME_PREFIXES.some((p) => (content.location.href || "").startsWith(p));
+        } catch (err) {
+          return false;
+        }
       }
-      gURLBar.focus();
-      gURLBar.select();
-    } catch (err) {
-      log("falha ao redirecionar clique da busca:", err);
-    }
-  }
 
-  function attachClickHandlerToBrowser(browser) {
-    try {
-      if (!browser || attachedBrowsers.has(browser)) return;
-      browser.addEventListener("click", handleContentClick, true);
-      attachedBrowsers.add(browser);
-      log("listener de clique anexado a um <browser>");
-    } catch (err) {
-      log("falha ao anexar listener de clique na aba:", err);
+      addEventListener(
+        "click",
+        function (e) {
+          try {
+            if (!isHome()) return;
+            const t = e.target;
+            if (!t || e.button !== 0) return;
+            const withinSearch =
+              t.id === SEARCH_ID || (t.closest && t.closest("#searchForm, #" + SEARCH_ID));
+            if (!withinSearch) return;
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+              t.blur();
+            } catch (err) {
+              /* ignora */
+            }
+            sendAsyncMessage(${JSON.stringify(SEARCH_CLICK_MSG)}, {});
+          } catch (err) {
+            /* ignora */
+          }
+        },
+        true
+      );
+    }).call(this);
+  `;
+
+  function getGlobalMessageManager() {
+    const interfaceNames = [
+      "nsIMessageListenerManager",
+      "nsIMessageBroadcaster",
+      "nsIFrameScriptLoader",
+      "nsISupports",
+    ];
+    for (const name of interfaceNames) {
+      try {
+        const iface = XPCOM.ci[name];
+        if (!iface) continue;
+        return XPCOM.cc["@mozilla.org/globalmessagemanager;1"].getService(iface);
+      } catch (err) {
+        /* tenta a próxima */
+      }
     }
+    return null;
   }
 
   function setupSearchBarRedirect() {
-    if (!window.gBrowser || !gBrowser.tabContainer) {
-      setTimeout(setupSearchBarRedirect, 500);
+    if (!XPCOM) {
+      log("Components/Cc/Ci indisponíveis, não dá pra usar o frame script");
       return;
     }
-
     try {
-      // Abas já abertas.
-      for (const tab of gBrowser.tabs) {
-        if (tab.linkedBrowser) attachClickHandlerToBrowser(tab.linkedBrowser);
+      const mm = getGlobalMessageManager();
+      if (!mm) {
+        log("não foi possível obter o global message manager");
+        return;
       }
+      const dataUrl =
+        "data:application/javascript;charset=utf-8," + encodeURIComponent(FRAME_SCRIPT_SRC);
 
-      // Abas novas, incluindo troca de processo/remoteness.
-      gBrowser.tabContainer.addEventListener("TabOpen", (e) => {
-        if (e.target?.linkedBrowser) attachClickHandlerToBrowser(e.target.linkedBrowser);
-      });
-      gBrowser.tabContainer.addEventListener("TabBrowserInserted", (e) => {
-        if (e.target?.linkedBrowser) attachClickHandlerToBrowser(e.target.linkedBrowser);
+      mm.loadFrameScript(dataUrl, true);
+      mm.addMessageListener(SEARCH_CLICK_MSG, () => {
+        log("clique na barra de pesquisa da Speed Dial, abrindo a urlbar");
+        gURLBar.focus();
+        gURLBar.select();
       });
 
-      // Rede de segurança: cobre casos como abas de nova-aba
-      // pré-carregadas (newtab preload), que trocam o <browser> de
-      // uma aba sem disparar os eventos acima.
-      const observerTarget = gBrowser.tabpanels || gBrowser;
-      const mo = new MutationObserver((mutations) => {
-        for (const m of mutations) {
-          for (const node of m.addedNodes) {
-            if (node.nodeName === "browser") {
-              attachClickHandlerToBrowser(node);
-            } else if (node.querySelectorAll) {
-              node.querySelectorAll("browser").forEach(attachClickHandlerToBrowser);
-            }
-          }
-        }
-      });
-      mo.observe(observerTarget, { childList: true, subtree: true });
-
-      log("redirecionamento da barra de pesquisa: configurado com sucesso");
+      log("redirecionamento da barra de pesquisa: configurado com sucesso (frame script)");
     } catch (err) {
       console.error("[TypeToSearch] falha ao configurar redirecionamento da busca:", err);
     }
