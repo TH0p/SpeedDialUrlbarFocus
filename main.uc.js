@@ -65,6 +65,20 @@
     requestAnimationFrame(caretToEnd);
   }
 
+  function activateUrlBar() {
+    log("ativando urlbar (via search, sem alterar texto)");
+    try {
+      gURLBar.search(gURLBar.value || "");
+    } catch (err) {
+      try {
+        gURLBar.focus();
+        gURLBar.startQuery();
+      } catch (err2) {
+        log("falha ao ativar urlbar:", err2);
+      }
+    }
+  }
+
   function handlePaste() {
     const syncText = readClipboardTextSync();
     if (syncText) {
@@ -116,8 +130,7 @@
       window.messageManager.addMessageListener(SEARCH_CLICK_MSG, () => {
         if (!isHomePage()) return;
         log("Clique na barra de pesquisa detectado, ativando urlbar");
-        gURLBar.focus();
-        gURLBar.select();
+        activateUrlBar();
       });
     } catch (err) {
       log("Erro ao configurar listener de clique:", err);
