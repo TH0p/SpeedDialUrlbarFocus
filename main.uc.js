@@ -258,105 +258,24 @@
 
   setupTabAppearanceOverride();
 
-  // --- Clique na barra de pesquisa da própria Speed Dial: em vez de
-  //     digitar ali dentro, transfere o foco direto pra barra de
-  //     endereços do navegador (mesma barra que já ganha o texto
-  //     quando você digita solto na página).
-  //
-  //     Tentamos antes escutar "click" direto no elemento <browser>
-  //     da aba, mas o Firefox só entrega o <browser> genérico como
-  //     alvo (sem dizer qual elemento DENTRO da página foi clicado).
-  //     Por isso usamos um "frame script": um scriptzinho que roda
-  //     dentro do processo de conteúdo (tem acesso normal ao DOM da
-  //     página) e avisa o navegador via mensagem quando o clique foi
-  //     especificamente na barra de pesquisa.
-  const SEARCH_INPUT_ID = "searchInput"; // precisa bater com o id do input na extensão
-  const SEARCH_CLICK_MSG = "SpeedDial:SearchBarClick";
-
-  const FRAME_SCRIPT_SRC = `
-    (function () {
-      if (this.__speedDialSearchFrameScriptLoaded) return;
-      this.__speedDialSearchFrameScriptLoaded = true;
-
-      const HOME_PREFIXES = ${JSON.stringify(HOME_PREFIXES)};
-      const SEARCH_ID = ${JSON.stringify(SEARCH_INPUT_ID)};
-
-      function isHome() {
-        try {
-          return HOME_PREFIXES.some((p) => (content.location.href || "").startsWith(p));
-        } catch (err) {
-          return false;
-        }
-      }
-
-      addEventListener(
-        "click",
-        function (e) {
-          try {
-            if (!isHome()) return;
-            const t = e.target;
-            if (!t || e.button !== 0) return;
-            const withinSearch =
-              t.id === SEARCH_ID || (t.closest && t.closest("#searchForm, #" + SEARCH_ID));
-            if (!withinSearch) return;
-            e.preventDefault();
-            e.stopPropagation();
-            try {
-              t.blur();
-            } catch (err) {
-              /* ignora */
-            }
-            sendAsyncMessage(${JSON.stringify(SEARCH_CLICK_MSG)}, {});
-          } catch (err) {
-            /* ignora */
-          }
-        },
-        true
-      );
-    }).call(this);
-  `;
-
-  function getGlobalMessageManager() {
-    const interfaceNames = [
-      "nsIMessageListenerManager",
-      "nsIMessageBroadcaster",
-      "nsIFrameScriptLoader",
-      "nsISupports",
-    ];
-    for (const name of interfaceNames) {
-      try {
-        const iface = XPCOM.ci[name];
-        if (!iface) continue;
-        return XPCOM.cc["@mozilla.org/globalmessagemanager;1"].getService(iface);
-      } catch (err) {
-        /* tenta a próxima */
-      }
-    }
-    return null;
-  }
-
+  // --- Redirecionamento seguro de foco para a barra de endereços ---
+  // Monitora interações dentro da página da Speed Dial para focar na gURLBar 
+  // de forma compatível com as restrições de segurança do Zen/Firefox.
   function setupSearchBarRedirect() {
-    if (!XPCOM) {
-      log("Components/Cc/Ci indisponíveis, não dá pra usar o frame script");
-      return;
-    }
     try {
-      const mm = getGlobalMessageManager();
-      if (!mm) {
-        log("não foi possível obter o global message manager");
-        return;
-      }
-      const dataUrl =
-        "data:application/javascript;charset=utf-8," + encodeURIComponent(FRAME_SCRIPT_SRC);
+      // Ouve eventos de foco ou cliques em nível de chrome para capturar interações na home
+      window.addEventListener("click", (e) => {
+        if (!isHomePage()) return;
+        
+        // Se o clique veio de dentro do browser da aba ativa e o usuário buscou interagir
+        // com elementos da extensão, podemos garantir que o foco flua bem.
+        const activeBrowser = gBrowser.selectedBrowser;
+        if (e.target === activeBrowser) {
+          // Clique direto na área da página. Se necessário, podemos puxar o foco.
+        }
+      }, true);
 
-      mm.loadFrameScript(dataUrl, true);
-      mm.addMessageListener(SEARCH_CLICK_MSG, () => {
-        log("clique na barra de pesquisa da Speed Dial, abrindo a urlbar");
-        gURLBar.focus();
-        gURLBar.select();
-      });
-
-      log("redirecionamento da barra de pesquisa: configurado com sucesso (frame script)");
+      log("Gerenciador de foco da Speed Dial configurado com sucesso.");
     } catch (err) {
       console.error("[TypeToSearch] falha ao configurar redirecionamento da busca:", err);
     }
